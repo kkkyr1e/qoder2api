@@ -1,0 +1,19 @@
+{
+  "name": "qoder2api",
+  "version": "1.0.0",
+  "description": "Qoder AI to OpenAI-compatible API bridge (TypeScript)",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "ts-node src/index.ts"
+  },
+  "keywords": ["qoder", "openai", "bridge", "api"],
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "typescript": "^5.3.3"
+  },
+  "dependencies": {
+  }
+}

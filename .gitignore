@@ -1,0 +1,22 @@
+node_modules/
+dist/
+*.log
+qoder_server.log
+test_results.txt
+test_*.js
+
+# Secrets - contains PAT
+start-qoder-service.vbs
+qoder-service.bat
+
+# Java build
+qoder2api/target/
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
