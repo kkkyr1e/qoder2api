@@ -6,14 +6,19 @@
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
-    "dev": "ts-node src/index.ts"
+    "dev": "ts-node src/index.ts",
+    "test": "vitest run"
   },
-  "keywords": ["qoder", "openai", "bridge", "api"],
+  "keywords": [
+    "qoder",
+    "openai",
+    "bridge",
+    "api"
+  ],
   "license": "MIT",
   "devDependencies": {
     "@types/node": "^20.11.0",
-    "typescript": "^5.3.3"
-  },
-  "dependencies": {
+    "typescript": "^5.3.3",
+    "vitest": "^2.1.8"
   }
 }

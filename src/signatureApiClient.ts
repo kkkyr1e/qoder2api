@@ -5,8 +5,7 @@
 
 import * as signature from './signature';
 import * as qoderEncoding from './qoderEncoding';
-
-const COSY_VERSION = '0.1.43';
+import { COSY_VERSION } from './constants';
 
 export interface JobTokenResponse {
   name: string;

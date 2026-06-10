@@ -1,0 +1,62 @@
+{
+  "request_id": "{UUID1}",
+  "request_set_id": "{UUID2}",
+  "chat_record_id": "{UUID3}",
+  "stream": true,
+  "chat_task": "FREE_INPUT",
+  "chat_context": {
+    "chatPrompt": "",
+    "extra": {
+      "context": [],
+      "modelConfig": {
+        "is_reasoning": true,
+        "key": "ultimate",
+        "reasoning_effort": "max"
+      },
+      "originalContent": {
+        "type": "text",
+        "text": "hi"
+      }
+    },
+    "features": [],
+    "imageUrls": null,
+    "text": {
+      "type": "text",
+      "text": "hi"
+    }
+  },
+  "image_urls": null,
+  "is_reply": true,
+  "is_retry": false,
+  "session_id": "{UUID4}",
+  "code_language": "",
+  "source": 1,
+  "version": "3",
+  "chat_prompt": "",
+  "parameters": {
+    "max_tokens": 32768
+  },
+  "aliyun_user_type": "personal_standard",
+  "session_type": "qodercli",
+  "agent_id": "agent_common",
+  "task_id": "common",
+  "model_config": {
+    "key": "ultimate",
+    "display_name": "Ultimate",
+    "model": "",
+    "format": "openai",
+    "is_vl": false,
+    "is_reasoning": true,
+    "reasoning_effort": "max",
+    "api_key": "",
+    "url": "",
+    "source": "system",
+    "max_input_tokens": 1000000
+  },
+  "messages": [],
+  "business": {
+    "id": "{UUID5}",
+    "begin_at": {TIME1},
+    "name": ""
+  }
+}

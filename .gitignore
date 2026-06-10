@@ -8,6 +8,22 @@ test_*.js
 # Secrets - contains PAT
 start-qoder-service.vbs
 qoder-service.bat
+qoder-service.sh
+
+# Temp/debug files
+hello.txt
+test.txt
+qoder-test.txt
+chat_log.md
+qoder_tool.md
+find-in-bundle.js
+strings-binary.js
+test-tool-req.json
+test-tool-resp.txt
+
+# Claude local
+.claude/
+.qoder/
 
 # Java build
 qoder2api/target/

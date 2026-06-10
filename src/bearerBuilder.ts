@@ -4,6 +4,7 @@
  */
 
 import crypto from 'crypto';
+import { COSY_VERSION } from './constants';
 
 const SERVER_PUBKEY_PEM =
   '-----BEGIN PUBLIC KEY-----\n' +
@@ -12,8 +13,6 @@ const SERVER_PUBKEY_PEM =
   '6HRkPJ7S236FZz73In/KVuLnwI8JJ2CbuJap8kvheCCZpmAWpb/cPx/3Vr/J6I17\n' +
   'XcW+ML9FoCI6AOvOzwIDAQAB\n' +
   '-----END PUBLIC KEY-----';
-
-const COSY_VERSION = '0.1.43';
 
 export interface AuthIdentity {
   name: string;

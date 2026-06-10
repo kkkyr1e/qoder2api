@@ -6,6 +6,7 @@
 import * as qoderEncoding from './qoderEncoding';
 import * as bearerBuilder from './bearerBuilder';
 import type { SessionContext } from './bearerBuilder';
+import { SSE_IDLE_TIMEOUT_MS, SSE_REQUEST_TIMEOUT_MS } from './constants';
 import http from 'http';
 import https from 'https';
 
@@ -88,6 +89,10 @@ export class BearerApiClient {
   /**
    * Opens an SSE stream using Node.js native https module.
    * Uses a low-level approach with chunked reading and idle timeout.
+   *
+   * Follows 301/302/307/308 redirects up to MAX_REDIRECTS times. Because the
+   * bearer signature is bound to the request path, every redirect hop must be
+   * freshly re-signed against the new URL.
    */
   openStreamLines(
     fullUrl: string,
@@ -95,88 +100,122 @@ export class BearerApiClient {
     extraHeaders: Record<string, string> | undefined,
     onLine: (line: string) => void,
   ): Promise<void> {
+    const MAX_REDIRECTS = 5;
+    const session = this.session;
+
     return new Promise((resolve, reject) => {
-      const { body, date, bearer } = prepareRequest(this.session, fullUrl, jsonBody);
-      const headers = buildHeaders(this.session, bearer, date, 'text/event-stream', extraHeaders);
-      headers['cache-control'] = 'no-cache';
+      const doRequest = (targetUrl: string, redirectsLeft: number): void => {
+        const { body, date, bearer } = prepareRequest(session, targetUrl, jsonBody);
+        const headers = buildHeaders(session, bearer, date, 'text/event-stream', extraHeaders);
+        headers['cache-control'] = 'no-cache';
 
-      const urlObj = new URL(fullUrl);
-      const isHttps = urlObj.protocol === 'https:';
-      const transport = isHttps ? https : http;
+        const urlObj = new URL(targetUrl);
+        const isHttps = urlObj.protocol === 'https:';
+        const transport = isHttps ? https : http;
 
-      const requestOptions = {
-        hostname: urlObj.hostname,
-        port: urlObj.port || (isHttps ? 443 : 80),
-        path: urlObj.pathname + urlObj.search,
-        method: 'POST',
-        headers,
-        timeout: 300_000,
-      };
-
-      const request = transport.request(requestOptions, (response) => {
-        if (response.statusCode !== 200) {
-          let errorBody = '';
-          response.on('data', (chunk: Buffer) => { errorBody += chunk.toString(); });
-          response.on('end', () => {
-            reject(new Error(`HTTP ${response.statusCode} body=${errorBody}`));
-          });
-          return;
-        }
-
-        let lineBuf = '';
-        let idleTimer: ReturnType<typeof setTimeout> | null = null;
-
-        const resetIdleTimer = () => {
-          if (idleTimer) clearTimeout(idleTimer);
-          idleTimer = setTimeout(() => {
-            console.log('[stream] idle timeout, closing');
-            response.destroy();
-            resolve();
-          }, 3000);
+        const requestOptions = {
+          hostname: urlObj.hostname,
+          port: urlObj.port || (isHttps ? 443 : 80),
+          path: urlObj.pathname + urlObj.search,
+          method: 'POST',
+          headers,
+          timeout: SSE_REQUEST_TIMEOUT_MS,
         };
 
-        resetIdleTimer();
+        const request = transport.request(requestOptions, (response) => {
+          const status = response.statusCode ?? 0;
 
-        response.on('data', (chunk: Buffer) => {
+          // Handle redirects (preserve POST + body, re-sign for new path).
+          if (status === 301 || status === 302 || status === 307 || status === 308) {
+            const location = response.headers.location;
+            // Drain to free the socket.
+            response.resume();
+            if (!location) {
+              reject(new Error(`HTTP ${status} redirect without Location header`));
+              return;
+            }
+            if (redirectsLeft <= 0) {
+              reject(new Error(`Too many redirects (last: ${status} -> ${location})`));
+              return;
+            }
+            let nextUrl: string;
+            try {
+              nextUrl = new URL(location, targetUrl).toString();
+            } catch (e) {
+              reject(new Error(`Invalid redirect Location: ${location}`));
+              return;
+            }
+            console.log(`[stream] following ${status} redirect -> ${nextUrl}`);
+            doRequest(nextUrl, redirectsLeft - 1);
+            return;
+          }
+
+          if (status !== 200) {
+            let errorBody = '';
+            response.on('data', (chunk: Buffer) => { errorBody += chunk.toString(); });
+            response.on('end', () => {
+              reject(new Error(`HTTP ${status} body=${errorBody}`));
+            });
+            return;
+          }
+
+          let lineBuf = '';
+          let idleTimer: ReturnType<typeof setTimeout> | null = null;
+
+          const resetIdleTimer = () => {
+            if (idleTimer) clearTimeout(idleTimer);
+            idleTimer = setTimeout(() => {
+              console.log('[stream] idle timeout, closing');
+              response.destroy();
+              resolve();
+            }, SSE_IDLE_TIMEOUT_MS);
+          };
+
           resetIdleTimer();
-          lineBuf += chunk.toString('utf-8');
 
-          let newlineIndex: number;
-          while ((newlineIndex = lineBuf.indexOf('\n')) !== -1) {
-            let line = lineBuf.substring(0, newlineIndex);
-            lineBuf = lineBuf.substring(newlineIndex + 1);
-            if (line.endsWith('\r')) {
-              line = line.substring(0, line.length - 1);
+          response.on('data', (chunk: Buffer) => {
+            resetIdleTimer();
+            lineBuf += chunk.toString('utf-8');
+
+            let newlineIndex: number;
+            while ((newlineIndex = lineBuf.indexOf('\n')) !== -1) {
+              let line = lineBuf.substring(0, newlineIndex);
+              lineBuf = lineBuf.substring(newlineIndex + 1);
+              if (line.endsWith('\r')) {
+                line = line.substring(0, line.length - 1);
+              }
+              if (line.length > 0) {
+                onLine(line);
+              }
             }
-            if (line.length > 0) {
-              onLine(line);
+          });
+
+          response.on('end', () => {
+            if (idleTimer) clearTimeout(idleTimer);
+            if (lineBuf.length > 0) {
+              onLine(lineBuf);
             }
-          }
+            console.log('[stream] read complete');
+            resolve();
+          });
+
+          response.on('error', (error: Error) => {
+            if (idleTimer) clearTimeout(idleTimer);
+            reject(error);
+          });
         });
 
-        response.on('end', () => {
-          if (idleTimer) clearTimeout(idleTimer);
-          if (lineBuf.length > 0) {
-            onLine(lineBuf);
-          }
-          console.log('[stream] read complete');
-          resolve();
+        request.on('error', reject);
+        request.on('timeout', () => {
+          request.destroy();
+          reject(new Error('Request timeout'));
         });
 
-        response.on('error', (error: Error) => {
-          if (idleTimer) clearTimeout(idleTimer);
-          reject(error);
-        });
-      });
+        request.write(body);
+        request.end();
+      };
 
-      request.on('error', reject);
-      request.on('timeout', () => {
-        request.destroy();
-        reject(new Error('Request timeout'));
-      });
-
-      request.write(body);
-      request.end();
+      doRequest(fullUrl, MAX_REDIRECTS);
     });
   }
 }
