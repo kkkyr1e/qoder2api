@@ -1,16 +1,93 @@
-/**
- * Bearer-authenticated HTTP client for Qoder API calls.
- * Handles both regular JSON requests and SSE streaming requests.
- */
+/** Bearer-authenticated HTTP client for Qoder API calls. */
 
+import http from 'http';
+import https from 'https';
 import * as qoderEncoding from './qoderEncoding';
 import * as bearerBuilder from './bearerBuilder';
 import type { SessionContext } from './bearerBuilder';
-import { SSE_IDLE_TIMEOUT_MS, SSE_REQUEST_TIMEOUT_MS } from './constants';
-import http from 'http';
-import https from 'https';
+import {
+  HTTP_CONNECT_TIMEOUT_MS,
+  SSE_IDLE_TIMEOUT_MS,
+  SSE_REQUEST_TIMEOUT_MS,
+} from './constants';
 
 const COSY_VERSION = '0.1.43';
+const MAX_UPSTREAM_CONCURRENCY = 2;
+const MAX_RETRIES = 3;
+const RETRY_BASE_DELAY_MS = 5_000;
+const RETRYABLE_STATUS = new Set([429, 502, 503, 504]);
+const MAX_ERROR_BODY_CHARS = 8_192;
+
+export class QoderHttpError extends Error {
+  constructor(
+    public readonly status: number,
+    public readonly responseBody: string,
+  ) {
+    super(`HTTP ${status} body=${responseBody.substring(0, MAX_ERROR_BODY_CHARS)}`);
+    this.name = 'QoderHttpError';
+  }
+}
+
+interface SemaphoreWaiter {
+  resolve: () => void;
+  reject: (error: Error) => void;
+  signal?: AbortSignal;
+  abortListener?: () => void;
+}
+
+class Semaphore {
+  private current = 0;
+  private queue: SemaphoreWaiter[] = [];
+
+  constructor(private readonly maxConcurrency: number) {}
+
+  async acquire(signal?: AbortSignal): Promise<void> {
+    if (signal?.aborted) throw abortError();
+    if (this.current < this.maxConcurrency) {
+      this.current++;
+      return;
+    }
+    return new Promise<void>((resolve, reject) => {
+      const waiter: SemaphoreWaiter = { resolve, reject, signal };
+      if (signal) {
+        waiter.abortListener = () => {
+          const index = this.queue.indexOf(waiter);
+          if (index >= 0) this.queue.splice(index, 1);
+          reject(abortError());
+        };
+        signal.addEventListener('abort', waiter.abortListener, { once: true });
+      }
+      this.queue.push(waiter);
+    });
+  }
+
+  release(): void {
+    this.current = Math.max(0, this.current - 1);
+    while (this.queue.length > 0) {
+      const next = this.queue.shift()!;
+      if (next.signal?.aborted) continue;
+      if (next.abortListener) next.signal?.removeEventListener('abort', next.abortListener);
+      this.current++;
+      next.resolve();
+      break;
+    }
+  }
+
+  get pending(): number { return this.queue.length; }
+  get active(): number { return this.current; }
+}
+
+const upstreamSemaphore = new Semaphore(MAX_UPSTREAM_CONCURRENCY);
+
+export function getUpstreamConcurrencyStats(): { active: number; pending: number; limit: number } {
+  return { active: upstreamSemaphore.active, pending: upstreamSemaphore.pending, limit: MAX_UPSTREAM_CONCURRENCY };
+}
+
+function abortError(): Error {
+  const error = new Error('Request aborted');
+  error.name = 'AbortError';
+  return error;
+}
 
 function buildHeaders(
   session: SessionContext,
@@ -27,9 +104,9 @@ function buildHeaders(
     'cosy-date': date,
     'cosy-user': session.identity.uid,
     'cosy-key': session.cosyKey,
-    'accept': accept,
+    accept,
     'cosy-clientip': '169.254.198.161',
-    'authorization': bearer,
+    authorization: bearer,
     'accept-encoding': 'identity',
     'cosy-version': COSY_VERSION,
     'cosy-machineid': session.machineId,
@@ -37,9 +114,7 @@ function buildHeaders(
     'login-version': 'v2',
     'user-agent': 'Go-http-client/2.0',
   };
-  if (extraHeaders) {
-    Object.assign(headers, extraHeaders);
-  }
+  if (extraHeaders) Object.assign(headers, extraHeaders);
   return headers;
 }
 
@@ -47,175 +122,214 @@ function prepareRequest(
   session: SessionContext,
   fullUrl: string,
   jsonBody: unknown | null,
-): { body: string; payloadB64: string; date: string; sig: string; bearer: string } {
+): { body: string; date: string; bearer: string } {
   const urlObj = new URL(fullUrl);
   const rawPath = urlObj.pathname;
   const pathSig = rawPath.startsWith('/algo') ? rawPath.substring('/algo'.length) : rawPath;
-  const body = jsonBody === null
-    ? ''
-    : qoderEncoding.encode(Buffer.from(JSON.stringify(jsonBody)));
+  const body = jsonBody === null ? '' : qoderEncoding.encode(Buffer.from(JSON.stringify(jsonBody)));
   const payloadB64 = bearerBuilder.buildPayloadB64(session.info);
   const date = String(Math.floor(Date.now() / 1000));
   const sig = bearerBuilder.signRequest(payloadB64, session.cosyKey, date, body, pathSig);
-  const bearer = bearerBuilder.composeBearer(payloadB64, sig);
-  return { body, payloadB64, date, sig, bearer };
+  return { body, date, bearer: bearerBuilder.composeBearer(payloadB64, sig) };
+}
+
+async function readErrorResponse(response: Response): Promise<string> {
+  return (await response.text()).substring(0, MAX_ERROR_BODY_CHARS);
+}
+
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.reject(abortError());
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(resolve, ms);
+    timer.unref?.();
+    signal?.addEventListener('abort', () => {
+      clearTimeout(timer);
+      reject(abortError());
+    }, { once: true });
+  });
 }
 
 export class BearerApiClient {
   constructor(private readonly session: SessionContext) {}
 
-  async callPost(fullUrl: string, jsonBody: unknown): Promise<unknown> {
+  async callPost(fullUrl: string, jsonBody: unknown, signal?: AbortSignal): Promise<unknown> {
     const { body, date, bearer } = prepareRequest(this.session, fullUrl, jsonBody);
     const headers = buildHeaders(this.session, bearer, date, 'application/json');
-    const response = await fetch(fullUrl, { method: 'POST', headers, body });
-    if (!response.ok) {
-      const errorBody = await response.text();
-      throw new Error(`HTTP ${response.status} body=${errorBody}`);
-    }
+    const response = await fetch(fullUrl, {
+      method: 'POST', headers, body,
+      signal: signal ?? AbortSignal.timeout(HTTP_CONNECT_TIMEOUT_MS),
+    });
+    if (!response.ok) throw new QoderHttpError(response.status, await readErrorResponse(response));
     return response.json();
   }
 
-  async callGet(fullUrl: string): Promise<unknown> {
+  async callGet(fullUrl: string, signal?: AbortSignal): Promise<unknown> {
     const { date, bearer } = prepareRequest(this.session, fullUrl, null);
     const headers = buildHeaders(this.session, bearer, date, 'application/json');
-    const response = await fetch(fullUrl, { method: 'GET', headers });
-    if (!response.ok) {
-      const errorBody = await response.text();
-      throw new Error(`HTTP ${response.status} body=${errorBody}`);
-    }
+    const response = await fetch(fullUrl, {
+      method: 'GET', headers,
+      signal: signal ?? AbortSignal.timeout(HTTP_CONNECT_TIMEOUT_MS),
+    });
+    if (!response.ok) throw new QoderHttpError(response.status, await readErrorResponse(response));
     return response.json();
   }
 
-  /**
-   * Opens an SSE stream using Node.js native https module.
-   * Uses a low-level approach with chunked reading and idle timeout.
-   *
-   * Follows 301/302/307/308 redirects up to MAX_REDIRECTS times. Because the
-   * bearer signature is bound to the request path, every redirect hop must be
-   * freshly re-signed against the new URL.
-   */
-  openStreamLines(
+  async openStreamLines(
     fullUrl: string,
     jsonBody: unknown,
     extraHeaders: Record<string, string> | undefined,
     onLine: (line: string) => void,
+    signal?: AbortSignal,
   ): Promise<void> {
-    const MAX_REDIRECTS = 5;
+    let lastError: Error | null = null;
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      if (attempt > 0) {
+        const delay = RETRY_BASE_DELAY_MS * Math.pow(2, attempt - 1);
+        console.warn(`[stream] retry=${attempt}/${MAX_RETRIES} delay_ms=${delay}`);
+        await sleep(delay, signal);
+      }
+      await upstreamSemaphore.acquire(signal);
+      try {
+        await this.doStreamRequest(fullUrl, jsonBody, extraHeaders, onLine, signal);
+        return;
+      } catch (error) {
+        const normalized = error instanceof Error ? error : new Error(String(error));
+        lastError = normalized;
+        const status = normalized instanceof QoderHttpError ? normalized.status : null;
+        if (status && RETRYABLE_STATUS.has(status) && attempt < MAX_RETRIES) continue;
+        throw normalized;
+      } finally {
+        upstreamSemaphore.release();
+      }
+    }
+    throw lastError ?? new Error('All retries exhausted');
+  }
+
+  private doStreamRequest(
+    fullUrl: string,
+    jsonBody: unknown,
+    extraHeaders: Record<string, string> | undefined,
+    onLine: (line: string) => void,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    const maxRedirects = 5;
     const session = this.session;
 
     return new Promise((resolve, reject) => {
+      let settled = false;
+      let activeRequest: http.ClientRequest | null = null;
+      let activeResponse: http.IncomingMessage | null = null;
+      let idleTimer: ReturnType<typeof setTimeout> | null = null;
+      let totalTimer: ReturnType<typeof setTimeout> | null = null;
+
+      const cleanup = () => {
+        if (idleTimer) clearTimeout(idleTimer);
+        if (totalTimer) clearTimeout(totalTimer);
+        signal?.removeEventListener('abort', onAbort);
+      };
+      const succeed = () => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        resolve();
+      };
+      const fail = (error: unknown) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        reject(error instanceof Error ? error : new Error(String(error)));
+      };
+      const onAbort = () => {
+        const error = abortError();
+        activeResponse?.destroy(error);
+        activeRequest?.destroy(error);
+        fail(error);
+      };
+      const resetIdleTimer = () => {
+        if (idleTimer) clearTimeout(idleTimer);
+        idleTimer = setTimeout(() => {
+          const error = new Error(`Upstream SSE idle timeout after ${SSE_IDLE_TIMEOUT_MS}ms`);
+          activeResponse?.destroy(error);
+          activeRequest?.destroy(error);
+          fail(error);
+        }, SSE_IDLE_TIMEOUT_MS);
+      };
+
+      if (signal?.aborted) return fail(abortError());
+      signal?.addEventListener('abort', onAbort, { once: true });
+      totalTimer = setTimeout(() => {
+        const error = new Error(`Upstream SSE request timeout after ${SSE_REQUEST_TIMEOUT_MS}ms`);
+        activeResponse?.destroy(error);
+        activeRequest?.destroy(error);
+        fail(error);
+      }, SSE_REQUEST_TIMEOUT_MS);
+
       const doRequest = (targetUrl: string, redirectsLeft: number): void => {
+        if (settled) return;
         const { body, date, bearer } = prepareRequest(session, targetUrl, jsonBody);
         const headers = buildHeaders(session, bearer, date, 'text/event-stream', extraHeaders);
         headers['cache-control'] = 'no-cache';
-
         const urlObj = new URL(targetUrl);
-        const isHttps = urlObj.protocol === 'https:';
-        const transport = isHttps ? https : http;
+        const transport = urlObj.protocol === 'https:' ? https : http;
 
-        const requestOptions = {
+        const request = transport.request({
           hostname: urlObj.hostname,
-          port: urlObj.port || (isHttps ? 443 : 80),
+          port: urlObj.port || (urlObj.protocol === 'https:' ? 443 : 80),
           path: urlObj.pathname + urlObj.search,
           method: 'POST',
           headers,
-          timeout: SSE_REQUEST_TIMEOUT_MS,
-        };
-
-        const request = transport.request(requestOptions, (response) => {
+        }, (response) => {
+          activeResponse = response;
           const status = response.statusCode ?? 0;
-
-          // Handle redirects (preserve POST + body, re-sign for new path).
-          if (status === 301 || status === 302 || status === 307 || status === 308) {
+          if ([301, 302, 307, 308].includes(status)) {
             const location = response.headers.location;
-            // Drain to free the socket.
             response.resume();
-            if (!location) {
-              reject(new Error(`HTTP ${status} redirect without Location header`));
-              return;
-            }
-            if (redirectsLeft <= 0) {
-              reject(new Error(`Too many redirects (last: ${status} -> ${location})`));
-              return;
-            }
+            if (!location) return fail(new Error(`HTTP ${status} redirect without Location header`));
+            if (redirectsLeft <= 0) return fail(new Error(`Too many redirects (last status ${status})`));
             let nextUrl: string;
-            try {
-              nextUrl = new URL(location, targetUrl).toString();
-            } catch (e) {
-              reject(new Error(`Invalid redirect Location: ${location}`));
-              return;
-            }
-            console.log(`[stream] following ${status} redirect -> ${nextUrl}`);
+            try { nextUrl = new URL(location, targetUrl).toString(); }
+            catch { return fail(new Error('Invalid redirect Location')); }
             doRequest(nextUrl, redirectsLeft - 1);
             return;
           }
-
           if (status !== 200) {
             let errorBody = '';
-            response.on('data', (chunk: Buffer) => { errorBody += chunk.toString(); });
-            response.on('end', () => {
-              reject(new Error(`HTTP ${status} body=${errorBody}`));
+            response.on('data', (chunk: Buffer) => {
+              if (errorBody.length < MAX_ERROR_BODY_CHARS) errorBody += chunk.toString();
             });
+            response.on('end', () => fail(new QoderHttpError(status, errorBody)));
+            response.on('error', fail);
             return;
           }
 
-          let lineBuf = '';
-          let idleTimer: ReturnType<typeof setTimeout> | null = null;
-
-          const resetIdleTimer = () => {
-            if (idleTimer) clearTimeout(idleTimer);
-            idleTimer = setTimeout(() => {
-              console.log('[stream] idle timeout, closing');
-              response.destroy();
-              resolve();
-            }, SSE_IDLE_TIMEOUT_MS);
-          };
-
+          let lineBuffer = '';
           resetIdleTimer();
-
           response.on('data', (chunk: Buffer) => {
             resetIdleTimer();
-            lineBuf += chunk.toString('utf-8');
-
+            lineBuffer += chunk.toString('utf-8');
             let newlineIndex: number;
-            while ((newlineIndex = lineBuf.indexOf('\n')) !== -1) {
-              let line = lineBuf.substring(0, newlineIndex);
-              lineBuf = lineBuf.substring(newlineIndex + 1);
-              if (line.endsWith('\r')) {
-                line = line.substring(0, line.length - 1);
-              }
-              if (line.length > 0) {
-                onLine(line);
-              }
+            while ((newlineIndex = lineBuffer.indexOf('\n')) !== -1) {
+              let line = lineBuffer.substring(0, newlineIndex);
+              lineBuffer = lineBuffer.substring(newlineIndex + 1);
+              if (line.endsWith('\r')) line = line.substring(0, line.length - 1);
+              if (line.length > 0) onLine(line);
             }
           });
-
           response.on('end', () => {
-            if (idleTimer) clearTimeout(idleTimer);
-            if (lineBuf.length > 0) {
-              onLine(lineBuf);
-            }
-            console.log('[stream] read complete');
-            resolve();
+            if (lineBuffer.length > 0) onLine(lineBuffer);
+            succeed();
           });
-
-          response.on('error', (error: Error) => {
-            if (idleTimer) clearTimeout(idleTimer);
-            reject(error);
-          });
+          response.on('aborted', () => fail(new Error('Upstream response aborted')));
+          response.on('error', fail);
         });
 
-        request.on('error', reject);
-        request.on('timeout', () => {
-          request.destroy();
-          reject(new Error('Request timeout'));
-        });
-
+        activeRequest = request;
+        request.on('error', fail);
         request.write(body);
         request.end();
       };
 
-      doRequest(fullUrl, MAX_REDIRECTS);
+      doRequest(fullUrl, maxRedirects);
     });
   }
 }

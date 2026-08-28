@@ -1,21 +1,37 @@
 {
   "name": "qoder2api",
-  "version": "1.0.0",
-  "description": "Qoder AI to OpenAI-compatible API bridge (TypeScript)",
+  "version": "1.2.0",
+  "description": "Qoder to Anthropic Messages and OpenAI-compatible local API bridge",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kkkyr1e/qoder2api.git"
+  },
+  "homepage": "https://github.com/kkkyr1e/qoder2api#readme",
+  "bugs": {
+    "url": "https://github.com/kkkyr1e/qoder2api/issues"
+  },
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
+    "start:env": "node --env-file=.env dist/index.js",
+    "quickstart": "npm run build && node --env-file=.env dist/index.js",
+    "models": "node scripts/list-models.js",
+    "doctor": "node scripts/doctor.js",
+    "install:claude": "node scripts/install-claude-settings.js standard",
+    "install:claude:ultimate": "node scripts/install-claude-settings.js ultimate",
     "dev": "ts-node src/index.ts",
     "test": "vitest run"
   },
   "keywords": [
     "qoder",
     "openai",
+    "anthropic",
+    "claude-code",
     "bridge",
     "api"
   ],
-  "license": "MIT",
+  "license": "Apache-2.0",
   "devDependencies": {
     "@types/node": "^20.11.0",
     "typescript": "^5.3.3",

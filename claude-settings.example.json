@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "model": "sonnet",
+  "env": {
+    "ANTHROPIC_BASE_URL": "http://127.0.0.1:8963",
+    "ANTHROPIC_API_KEY": "local-bridge-key",
+    "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": "1",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-qoder-ultimate[1m]",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL_NAME": "Qoder Ultimate (1M)",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL_SUPPORTED_CAPABILITIES": "effort,xhigh_effort,max_effort,thinking,adaptive_thinking,interleaved_thinking",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "claude-qoder-performance",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL_NAME": "Qoder Performance",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL_SUPPORTED_CAPABILITIES": "effort,xhigh_effort,max_effort,thinking,adaptive_thinking,interleaved_thinking",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "claude-qoder-efficient",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME": "Qoder Efficient",
+    "CLAUDE_CODE_EFFORT_LEVEL": "medium",
+    "API_TIMEOUT_MS": "3600000"
+  }
+}

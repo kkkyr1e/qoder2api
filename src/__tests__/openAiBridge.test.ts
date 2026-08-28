@@ -4,38 +4,38 @@ import { resolveModelKey, convertAnthropicMessages, trimMessagesForQoder } from 
 describe('resolveModelKey', () => {
   it('should return exact match for known model keys', () => {
     expect(resolveModelKey('lite')).toBe('lite');
-    expect(resolveModelKey('plus')).toBe('plus');
-    expect(resolveModelKey('max')).toBe('max');
+    expect(resolveModelKey('plus')).toBe('efficient');
+    expect(resolveModelKey('max')).toBe('performance');
     expect(resolveModelKey('ultimate')).toBe('ultimate');
   });
 
   it('should be case-insensitive', () => {
     expect(resolveModelKey('LITE')).toBe('lite');
-    expect(resolveModelKey('Plus')).toBe('plus');
-    expect(resolveModelKey('MAX')).toBe('max');
+    expect(resolveModelKey('Plus')).toBe('efficient');
+    expect(resolveModelKey('MAX')).toBe('performance');
   });
 
-  it('should match when model name contains a known key', () => {
-    expect(resolveModelKey('qoder-lite-v2')).toBe('lite');
-    expect(resolveModelKey('some-plus-model')).toBe('plus');
+  it('should accept bridge-prefixed model keys', () => {
+    expect(resolveModelKey('qoder-lite')).toBe('lite');
+    expect(resolveModelKey('claude-qoder-qmodel_38max')).toBe('qmodel_38max');
   });
 
   it('should map Claude model names via explicit mapping', () => {
-    expect(resolveModelKey('claude-sonnet-4-5')).toBe('max');
+    expect(resolveModelKey('claude-sonnet-4-5')).toBe('performance');
     expect(resolveModelKey('claude-opus-4-7')).toBe('ultimate');
-    expect(resolveModelKey('claude-3-haiku')).toBe('lite');
+    expect(resolveModelKey('claude-3-haiku')).toBe('efficient');
     expect(resolveModelKey('claude-3-opus')).toBe('ultimate');
   });
 
   it('should fallback by substring pattern for unknown claude models', () => {
-    expect(resolveModelKey('some-haiku-variant')).toBe('lite');
-    expect(resolveModelKey('new-sonnet-model')).toBe('max');
+    expect(resolveModelKey('some-haiku-variant')).toBe('efficient');
+    expect(resolveModelKey('new-sonnet-model')).toBe('performance');
     expect(resolveModelKey('future-opus-version')).toBe('ultimate');
   });
 
-  it('should default to "ultimate" for completely unknown models', () => {
-    expect(resolveModelKey('unknown-model')).toBe('ultimate');
-    expect(resolveModelKey('')).toBe('ultimate');
+  it('should default to Qoder auto for completely unknown models', () => {
+    expect(resolveModelKey('unknown-model')).toBe('auto');
+    expect(resolveModelKey('')).toBe('auto');
   });
 });
 
