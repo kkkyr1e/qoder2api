@@ -11,6 +11,75 @@
 
 > 给 Agent 的一句话任务：阅读本文件，先确认当前 Shell 和工作目录，再按步骤执行；不得输出、提交或记录完整 PAT。
 
+## 0. Agent 最短执行流程
+
+用户只需把下面这句话交给 Agent：
+
+```text
+请完整阅读 AGENT_QUICKSTART.md，按“Agent 最短执行流程”完成安装与验证。需要 PAT 时暂停让我填写；不要输出、记录或提交 PAT。默认安装可在 /model 切换的配置，除非我明确要求 Ultimate + max + 1M。
+```
+
+Agent 按以下顺序执行：
+
+```bash
+# 1. 进入仓库根目录，必须能看到 package.json
+cd /path/to/qoder2api
+
+# 2. 安装并创建本地环境文件
+npm install
+cp .env.example .env
+
+# 3. 暂停，让用户把自己的 Qoder PAT 填入 .env
+# QODER_PAT=YOUR_QODER_PAT_HERE
+
+# 4. 编译和测试
+npm run build
+npm test
+
+# 5. 启动桥接；这是长驻进程，应放在独立终端或后台任务
+npm run start:env
+```
+
+另一个终端继续：
+
+```bash
+cd /path/to/qoder2api
+
+# 6. 安装 Claude 全局配置并保留原设置备份
+npm run install:claude
+
+# 如果用户明确要求固定默认 Ultimate + max + 1M，改用：
+# npm run install:claude:ultimate
+
+# 7. 验证服务和实时模型目录
+npm run doctor
+npm run models
+
+# 8. 普通启动 Claude Code。不要使用 --bare
+claude
+```
+
+Claude Code 启动后执行：
+
+```text
+/model
+```
+
+成功标准：
+
+```text
+doctor: status=ok
+catalogSource=remote
+catalogModels>0
+/model 中出现 From gateway 的 Qoder 模型
+普通文本请求成功
+Read 工具调用成功
+```
+
+VS Code 用户还需要执行 `Developer: Reload Window`，并创建全新 Claude 会话。
+
+如果任一步失败，再阅读本文后续对应章节；不要跳过错误继续配置。
+
 ## 1. 前置要求
 
 - Windows、macOS 或 Linux；
