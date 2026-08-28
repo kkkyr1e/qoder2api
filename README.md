@@ -3,7 +3,7 @@
 [![CI](https://github.com/kkkyr1e/qoder2api/actions/workflows/ci.yml/badge.svg)](https://github.com/kkkyr1e/qoder2api/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](./LICENSE)
 
-> Beta：这是非官方社区项目，与 Qoder、Alibaba 或 Anthropic 无隶属关系。请仅使用自己的账号与额度，并遵守相关服务条款。
+> Beta：这是非官方社区项目，与 Qoder、或 Anthropic 无隶属关系。请仅使用自己的账号与额度，并遵守相关服务条款。
 
 新用户、朋友分发和 Agent 代配置请优先阅读：[`AGENT_QUICKSTART.md`](./AGENT_QUICKSTART.md)。
 
